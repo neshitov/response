@@ -26,5 +26,5 @@ df.drop_duplicates(inplace=True)
 # check duplicates
 print(np.sum(df.duplicated()))
 
-engine = create_engine('sqlite:///categorized_messages.db')
+engine = create_engine('sqlite:///data/categorized_messages.db')
 df.to_sql('messages', engine)
