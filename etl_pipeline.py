@@ -15,6 +15,7 @@ categories.columns = category_colnames
 for column in categories:
     categories[column] = categories[column].str[-1]
     categories[column] = pd.to_numeric(categories[column], errors='coerce')
+    categories[column] = (categories[column] > 0).astype('int32')
 
 df.drop(columns=['categories'], inplace=True)
 df = pd.concat([df, categories], axis='columns')
