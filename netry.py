@@ -1,3 +1,11 @@
+import argparse
+
+argparser = argparse.ArgumentParser(description='Input path to messages,\
+                                        path to categories, and path to database')
+argparser.add_argument("path", help='path to message')
+args = argparser.parse_args()
+print('you entered path', args.path)
+
 '''
 import nltk
 from nltk.tokenize import word_tokenize
@@ -14,7 +22,7 @@ def preprocess(sent):
 #print(preprocess(ex))
 print(nltk.help.upenn_tagset('JJ'))
 '''
-
+'''
 import spacy
 nlp = spacy.load('en')
 doc = nlp('Apple is looking at buying U.K. startup for $1 billion in Los Angeles')
@@ -33,4 +41,5 @@ c = 3
 list = [a,b,c]
 for x in list:
     print(x)
+'''
 #print(entities('We have a lot of problem in Port-de-Paix'))
