@@ -1,3 +1,4 @@
 redis
+scikit-learn==0.20.1
 SQLAlchemy==1.2.7
 nltk==3.3

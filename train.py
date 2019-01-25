@@ -3,7 +3,7 @@ import numpy as np
 from sqlalchemy import create_engine
 from nltk.tokenize import RegexpTokenizer
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-from sklearn.pipeline import Pipeline
+from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
@@ -19,20 +19,31 @@ nltk.download('stopwords')
 nltk.download('wordnet')
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
-import sys
-
+import spacy
+import sys, os
+os.system("python -m spacy download en")
+nlp = spacy.load('en')
 engine = create_engine('sqlite:///data/categorized_messages.db')
 df = pd.read_sql_table('messages', engine)
-df = df.iloc[0:300,:]
-#print(df.columns)
-#print(len(df.columns))
-
+#df = df.iloc[0:100]
 X = df['message']
 
 cat_columns = df.columns[5:]
 Y = df[cat_columns].values
 
+#Extracting named entities
+def entities(text):
+    doc = nlp(text)
+    out = ""
+    for ent in doc.ents:
+        out = out + ent.text.lower() + ' '
+    return out
 
+class Entitizer:
+    def fit(self, X, y):
+        return self
+    def transform(self, X):
+        return X.apply(entities)
 
 def tokenize(text):
     text = text.lower()
@@ -44,14 +55,7 @@ def tokenize(text):
     return tokens
 
 
-#pipeline = Pipeline([
-#        ('vectorize', CountVectorizer(tokenizer=tokenize)),
-#        ('tfidf', TfidfTransformer()),
-#        ('clf', MultiOutputClassifier(RandomForestClassifier(max_depth=5, n_estimators=10)))
-#    ])
-
-
-single_pipeline = Pipeline([
+NB_pipeline = Pipeline([
         ('vectorize', CountVectorizer(tokenizer=tokenize)),
         ('tfidf', TfidfTransformer()),
         ('clf', ComplementNB())
@@ -63,6 +67,20 @@ svm_pipeline = Pipeline([
         ('clf', SVC(gamma=0.6))
     ])
 
+enhanced_svm_pipeline = Pipeline([
+    ('process', FeatureUnion([
+    ('all_tokens', Pipeline([
+            ('vectorize', CountVectorizer(tokenizer=tokenize)),
+            ('tfidf', TfidfTransformer())])),
+    ('named_entities', Pipeline([
+            ('named_entities', Entitizer()),
+            ('vectorize', CountVectorizer(tokenizer=tokenize)),
+            ('tfidf', TfidfTransformer())]))
+                ])),
+    ('clf', SVC(gamma=0.6))
+    ])
+
+
 
 def weighted_test_f1(pipe, X_test,Y_test):
     predict_test = pipe.predict(X_test)
@@ -70,15 +88,27 @@ def weighted_test_f1(pipe, X_test,Y_test):
             predict_test,output_dict=True)['weighted avg']['f1-score']
 
 
-''' Train pipeline '''
+''' Train  and compare pipelines '''
+results = pd.DataFrame({'model_name':[],'weighted_test_f1_score':[]})
 X_train, X_test, Y_train, Y_test = train_test_split(X,Y)
+pipelines = {'nb': NB_pipeline, 'svm': svm_pipeline, 'enhanced_svm': enhanced_svm_pipeline}
+for pipeline_name in pipelines:
+    pipeline = pipelines[pipeline_name]
+    pipeline.fit(X_train, Y_train[:,0])
+    score = weighted_test_f1(pipeline, X_test, Y_test)
+    results = results.append({'model_name':pipeline_name,'weighted_test_f1_score':score}, ignore_index=True)
+
+results.to_csv('metrics.csv')
+sys.exit()
+
+
 
 results = pd.DataFrame({'model_name':[],'weighted_test_f1_score':[]})
 results = pd.read_csv('training_metrics.csv')
 pipeline = svm_pipeline
 name = 'svm'
 parameters = {'clf__gamma':[0.65], 'tfidf__use_idf': [False,True]}
-
+'''
 for pars in ParameterGrid(parameters):
     pipeline.set_params(**pars)
     pipeline.fit(X_train, Y_train[:,0])
@@ -88,14 +118,11 @@ for pars in ParameterGrid(parameters):
         model_name = model_name + '_' + str(k) + '_' + str(pars[k])
     print(model_name, score)
     results = results.append({'model_name': model_name, 'weighted_f1_score': score}, ignore_index = True)
+'''
 
-print(results)
-results.to_csv('training_metrics.csv')
-sys.exit()
-
-svm_pipeline.fit(X_train, Y_train[:,0])
-predict_test = svm_pipeline.predict(X_test)
-predict_train = svm_pipeline.predict(X_train)
+enhanced_svm_pipeline.fit(X_train, Y_train[:,0])
+predict_test = enhanced_svm_pipeline.predict(X_test)
+predict_train = enhanced_svm_pipeline.predict(X_train)
 results = {}
 
 print('what we get')
