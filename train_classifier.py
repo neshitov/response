@@ -1,29 +1,29 @@
+''' Training a model for message classifier '''
+
 import pandas as pd
 import pickle
 import numpy as np
 from sqlalchemy import create_engine
 from nltk.tokenize import RegexpTokenizer
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
 from sklearn.pipeline import Pipeline, FeatureUnion
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, f1_score
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.multioutput import MultiOutputClassifier
-from sklearn.model_selection import GridSearchCV, ParameterGrid
-from sklearn.naive_bayes import MultinomialNB, ComplementNB
-from sklearn.svm import SVC
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import classification_report
+from sklearn.naive_bayes import ComplementNB
+from sklearn.svm import SVC, LinearSVC
 from sklearn.ensemble import VotingClassifier
-import json
+from sklearn.neighbors import KNeighborsClassifier
+import spacy
+import os
+import argparse
+import time
 import nltk
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('wordnet')
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-import spacy
-import sys, os
-import argparse
+
 
 argparser = argparse.ArgumentParser(description='Training a messages classfier')
 argparser.add_argument('database_path', help='Path to database')
@@ -32,24 +32,17 @@ args = argparser.parse_args()
 
 os.system("python -m spacy download en")
 nlp = spacy.load('en')
-engine = create_engine(os.path.join('sqlite:///',args.database_path))
-
+engine = create_engine(os.path.join('sqlite:///', args.database_path))
 
 df = pd.read_sql_table('messages', engine)
-#df = df.iloc[0:30]
+#df = df.iloc[0:10]
 X = df['message']
 
 cat_columns = df.columns[5:]
-#cat_columns = [col for col in cat_columns if df[col].nunique()>1]
-#cat_columns = [cat_columns[i] for i in [0,2]]
-#print(df[cat_columns])
-Y = df[cat_columns].values
-#print(Y.shape)
-#sys.exit()
-#Y = df[cat_columns].values
+Y = df[cat_columns]
 
-#Extracting named entities
 def entities(text):
+    '''returns string of found named entities'''
     doc = nlp(text)
     out = ""
     for ent in doc.ents:
@@ -57,6 +50,7 @@ def entities(text):
     return out
 
 class Entitizer:
+    ''' transformer extracting named entities'''
     def fit(self, X, y):
         return self
     def transform(self, X):
@@ -71,7 +65,7 @@ def tokenize(text):
     tokens = [lemmatizer.lemmatize(token).strip() for token in tokens]
     return tokens
 
-
+''' pipeline combining Naive Bayes with support vector machines'''
 voting_pipeline = Pipeline([
     ('process', FeatureUnion([
     ('all_tokens', Pipeline([
@@ -82,150 +76,101 @@ voting_pipeline = Pipeline([
             ('vectorize', CountVectorizer(tokenizer=tokenize)),
             ('tfidf', TfidfTransformer())]))
                 ])),
-    ('clf', MultiOutputClassifier(
-        VotingClassifier(estimators=[('svm', SVC(gamma=0.6, probability = True)),
-                                     ('NB',  ComplementNB())],
-                         voting='soft', weights=[1, 1])))
+    ('clf', VotingClassifier(estimators=[('svm', LinearSVC()),
+                                         ('knn', KNeighborsClassifier()),
+                                         ('NB',  ComplementNB())],
+                             voting='hard', weights=[1, 1]))
     ])
 
+''' naive Bayes classifier pipeline'''
+NB_pipeline = Pipeline([
+    ('process', FeatureUnion([
+    ('all_tokens', Pipeline([
+            ('vectorize', CountVectorizer(tokenizer=tokenize)),
+            ('tfidf', TfidfTransformer())])),
+    ('named_entities', Pipeline([
+            ('named_entities', Entitizer()),
+            ('vectorize', CountVectorizer(tokenizer=tokenize)),
+            ('tfidf', TfidfTransformer())]))
+                ])),
+    ('clf', ComplementNB())
+    ])
 
-'''
-'clf__estimator__svm__kernel': 'rbf'
-'clf__estimator__weights': [1, 1]
-'clf__estimator__svm__degree'
-'clf__estimator__svm__gamma'
-print(voting_pipeline.get_params())
-'''
-
-def weighted_test_f1(estimator, X_test, Y_test):
+def weighted_test_f1(estimator, X_test, Y_test_column):
     predict_test = estimator.predict(X_test)
-    score = 0
-    for i in range(Y_test.shape[1]):
-        score += classification_report(Y_test[:,i], predict_test[:,i],
-                                       output_dict=True)['weighted avg']['f1-score']
-    return score/(Y_test.shape[1])
+    return classification_report(Y_test_column, predict_test, output_dict=True)['weighted avg']['f1-score']
 
-gs = GridSearchCV(voting_pipeline, param_grid={
-                'clf__estimator__svm__kernel': ['rbf'],
-                'clf__estimator__weights': [[1, 1],[0,1],[1,0]],
-                'clf__estimator__svm__degree': [3],
-                'clf__estimator__svm__gamma': [0.6]
-                }, scoring=weighted_test_f1, cv=2)
+def train_classifier(column, X, Y):
+    ''' function to train categorical classifer for each categorical column
+        Args:
+              column: categorical column name
+              X, Y: messages and labels
+        Returns:
+              column_model: classifier for the given column label.
 
-gs.fit(X,Y)
+        Voting of support vector classifier and naive Bayes is used. For heavily unbalanced data
+        the Naive Bayes classifier is used to avoid error when one attempts to fit support vector classifier
+        to sample with no negative examples.
+    '''
+    if (Y[column].nunique()>1) and (np.min(Y[column].value_counts(normalize=True).values) > 0.04):
+        gs = GridSearchCV(voting_pipeline, param_grid={
+                    #'clf__svm__kernel': ['rbf'],
+                    'clf__weights': [[1, 1]],
+                    #'clf__svm__degree': [3],
+                    #'clf__svm__gamma': [0.6]
+                    }, scoring=weighted_test_f1, cv=2)
+        gs.fit(X,Y[column].values)
+        ''' find the best parameters '''
+        column_model = gs.best_estimator_
+    else:
+        gs = GridSearchCV(NB_pipeline, param_grid={
+                    'process__all_tokens__tfidf__use_idf': [True,False]
+                    }, scoring=weighted_test_f1, cv=2)
+        gs.fit(X,Y[column].values)
+        ''' find the best parameters '''
+        column_model = gs.best_estimator_
+    return column_model
 
-''' find the best parameters '''
-model = gs.best_estimator_
 
-''' evaluate the best model fit it on the train data and compute statistics on test data'''
+class ResponseModel():
+    ''' Class to store classifiers for all categorical columnsself.
+        Implements training, prediction and performance evaluation.
+    '''
+    classifiers = {}
+    def train(self, X, Y):
+        for column in cat_columns:
+            clf = train_classifier(column, X, Y)
+            self.classifiers[column] = clf
+
+    def predict(self, X):
+        assert self.classifiers, 'No classifier available yet. Call the train method first'
+        return pd.DataFrame(dict([(col, self.classifiers[col].predict(X)) for col in cat_columns]))
+
+    def f1_performance(self, X_test, Y_test):
+        predict_test = self.predict(X_test)
+        indices = ['0', '1', 'micro avg', 'macro avg', 'weighted avg']
+        f1_results = pd.DataFrame(dict([(col,[np.nan,np.nan,np.nan,np.nan,np.nan])
+                                        for col in cat_columns]), index = indices)
+        for col in cat_columns:
+            report = classification_report(Y_test[col], predict_test[col],output_dict=True)
+            for index in indices:
+                if index in report.keys():
+                    f1_results.loc[index, col] = report[index]['f1-score']
+        return f1_results
+
+
+''' Initialize the model'''
+model = ResponseModel()
+
+''' Training'''
 X_train, X_test, Y_train, Y_test = train_test_split(X,Y)
-model.fit(X_train, Y_train)
+model.train(X_train, Y_train)
 
-predict_test = model.predict(X_test)
-for i in range(Y_test.shape[1]):
-    print('column '+str(i)+':')
-    print(classification_report(Y_test[:,i], predict_test[:,i],
-                                output_dict=True)['weighted avg']['f1-score'])
+'''save model performance'''
+results = model.f1_performance(X_test, Y_test)
+print(results)
+results.to_csv('model_f1_performance.csv')
 
+''' save model to file '''
 with open(args.model_path, 'wb') as file:
     pickle.dump(model, file)
-
-print('after loading')
-
-with open(args.model_path, 'rb') as file:
-    loaded_model = pickle.load(file)
-
-predict_test = loaded_model.predict(X_test)
-for i in range(Y_test.shape[1]):
-    print('column '+str(i)+':')
-    print(classification_report(Y_test[:,i], predict_test[:,i],
-                                output_dict=True)['weighted avg']['f1-score'])
-
-
-sys.exit()
-
-
-
-results = pd.DataFrame({'model_name':[],'weighted_test_f1_score':[]})
-results = pd.read_csv('training_metrics.csv')
-pipeline = svm_pipeline
-name = 'svm'
-parameters = {'clf__gamma':[0.65], 'tfidf__use_idf': [False,True]}
-'''
-for pars in ParameterGrid(parameters):
-    pipeline.set_params(**pars)
-    pipeline.fit(X_train, Y_train[:,0])
-    score = weighted_test_f1(pipeline, X_test, Y_test)
-    model_name = name
-    for k in parameters.keys():
-        model_name = model_name + '_' + str(k) + '_' + str(pars[k])
-    print(model_name, score)
-    results = results.append({'model_name': model_name, 'weighted_f1_score': score}, ignore_index = True)
-'''
-
-enhanced_svm_pipeline.fit(X_train, Y_train[:,0])
-predict_test = enhanced_svm_pipeline.predict(X_test)
-predict_train = enhanced_svm_pipeline.predict(X_train)
-results = {}
-
-print('what we get')
-print('train:')
-results['svm']={}
-results['svm']['train'] = classification_report(Y_train[:,0], predict_train)
-print(results['svm']['train'])
-print('test:')
-results['svm']['test'] = classification_report(Y_test[:,0], predict_test)
-print(results['svm']['test'])
-with open('result.json', 'w') as fp:
-    json.dump(results, fp)
-
-sys.exit()
-
-''' Test model '''
-for i in range(Y.shape[1]):
-    print(cat_columns[i])
-    print(classification_report(Y_test[:,i], predict_test[:,i]))
-
-''' Grid search for paramter tuning. We will compare models by the accuracy of
-classifying if the message is realted to the disaster'''
-
-def scorer(estimator,X,Y):
-    pred = estimator.predict(X)
-    return f1_score(Y[:,0], pred[:,0])
-
-gs = GridSearchCV(pipeline, param_grid={'clf__estimator__n_estimators':[100,500],
-                             'clf__estimator__max_depth':[3,5,10]
-                              }, scoring=scorer)
-gs.fit(X,Y)
-results = pd.DataFrame.from_dict(gs.cv_results_)
-results.to_csv('training_metrics.csv')
-# return best parameters:
-print(gs.best_params_)
-
-''' Test the optimal model'''
-
-estimator = gs.best_estimator_
-X_train, X_test, Y_train, Y_test = train_test_split(X,Y)
-
-estimator.fit(X_train, Y_train)
-predict_test = estimator.predict(X_test)
-
-for i in range(Y.shape[1]):
-    print(cat_columns[i])
-    print(classification_report(Y_test[:,i], predict_test[:,i]))
-
-''' Try to improve model further: Try to use naive bayes classifier'''
-
-naive_bayes_pipeline = Pipeline([
-        ('vectorize', CountVectorizer(tokenizer=tokenize)),
-        ('tfidf', TfidfTransformer()),
-        ('clf', MultiOutputClassifier(GaussianNB()))
-    ])
-
-X_train, X_test, Y_train, Y_test = train_test_split(X,Y)
-naive_bayes_pipeline.fit(X_train,Y_train)
-predict_test = naive_bayes_pipeline.predict(X_test)
-
-for i in range(Y.shape[1]):
-    print(cat_columns[i])
-    print(classification_report(Y_test[:,i], predict_test[:,i]))
