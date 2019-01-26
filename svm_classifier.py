@@ -15,9 +15,6 @@ from sklearn.naive_bayes import ComplementNB
 from sklearn.svm import SVC, LinearSVC
 from sklearn.ensemble import VotingClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.multioutput import MultiOutputClassifier
-from sklearn.tree import DecisionTreeClassifier
 import spacy
 import os
 import argparse
@@ -38,7 +35,7 @@ nlp = spacy.load('en')
 engine = create_engine(os.path.join('sqlite:///', args.database_path))
 
 df = pd.read_sql_table('messages', engine)
-#df = df.iloc[0:100]
+df = df.iloc[0:100]
 X = df['message']
 
 cat_columns = df.columns[5:]
@@ -79,23 +76,31 @@ voting_pipeline = Pipeline([
             ('vectorize', CountVectorizer(tokenizer=tokenize)),
             ('tfidf', TfidfTransformer())]))
                 ])),
-    ('clf', MultiOutputClassifier(
-                                VotingClassifier(estimators=[('rf', KNeighborsClassifier(n_neighbors=3)),
-                                         ('knn', KNeighborsClassifier(n_neighbors=5)),
+    ('clf', VotingClassifier(estimators=[('svm', LinearSVC()),
+                                         ('knn', KNeighborsClassifier()),
                                          ('NB',  ComplementNB())],
-                             voting='hard', weights=[1, 1, 1]),
-                               n_jobs = -1))
+                             voting='hard', weights=[1, 1, 1]))
     ])
 
+''' naive Bayes classifier pipeline'''
+NB_pipeline = Pipeline([
+    ('process', FeatureUnion([
+    ('all_tokens', Pipeline([
+            ('vectorize', CountVectorizer(tokenizer=tokenize)),
+            ('tfidf', TfidfTransformer())])),
+    ('named_entities', Pipeline([
+            ('named_entities', Entitizer()),
+            ('vectorize', CountVectorizer(tokenizer=tokenize)),
+            ('tfidf', TfidfTransformer())]))
+                ])),
+    ('clf', ComplementNB())
+    ])
 
-def weighted_test_f1(estimator, X_test, Y_test):
+def weighted_test_f1(estimator, X_test, Y_test_column):
     predict_test = estimator.predict(X_test)
-    score = 0
-    for i in range(Y.shape[1]):
-        score += classification_report(Y_test[:,i], predict_test[:,i], output_dict=True)['weighted avg']['f1-score']
-    return score
+    return classification_report(Y_test_column, predict_test, output_dict=True)['weighted avg']['f1-score']
 
-def train_classifier(X, Y):
+def train_classifier(column, X, Y):
     ''' function to train categorical classifer for each categorical column
         Args:
               column: categorical column name
@@ -107,30 +112,40 @@ def train_classifier(X, Y):
         the Naive Bayes classifier is used to avoid error when one attempts to fit support vector classifier
         to sample with no negative examples.
     '''
-    gs = GridSearchCV(voting_pipeline, param_grid={
+    if (Y[column].nunique()>1) and (np.min(Y[column].value_counts(normalize=True).values) > 0.1):
+        gs = GridSearchCV(voting_pipeline, param_grid={
                     #'clf__svm__kernel': ['rbf'],
-                    'clf__estimator__weights': [[1, 1, 1],[0,1,0],[0,1,1]],
+                    'clf__weights': [[1, 1, 1]],
                     #'clf__svm__degree': [3],
                     #'clf__svm__gamma': [0.6]
                     }, scoring=weighted_test_f1, cv=2)
-    gs.fit(X,Y.values)
-    ''' find the best parameters '''
-    model = gs.best_estimator_
-    return model
+        gs.fit(X,Y[column].values)
+        ''' find the best parameters '''
+        column_model = gs.best_estimator_
+    else:
+        gs = GridSearchCV(NB_pipeline, param_grid={
+                    'process__all_tokens__tfidf__use_idf': [True,False]
+                    }, scoring=weighted_test_f1, cv=2)
+        gs.fit(X,Y[column].values)
+        ''' find the best parameters '''
+        column_model = gs.best_estimator_
+    return column_model
 
 
 class ResponseModel():
     ''' Class to store classifiers for all categorical columnsself.
         Implements training, prediction and performance evaluation.
     '''
-    classifiers = None
+    classifiers = {}
     def train(self, X, Y):
-        clf = train_classifier(X, Y)
-        self.classifier = clf
+        for column in cat_columns:
+            print('trained column '+column)
+            clf = train_classifier(column, X, Y)
+            self.classifiers[column] = clf
 
     def predict(self, X):
-        assert self.classifier is not None, 'No classifier available yet. Call the train method first'
-        return pd.DataFrame(dict([(cat_columns[i], self.classifier.predict(X)[:,i]) for i in range(len(cat_columns))]))
+        assert self.classifiers, 'No classifier available yet. Call the train method first'
+        return pd.DataFrame(dict([(col, self.classifiers[col].predict(X)) for col in cat_columns]))
 
     def f1_performance(self, X_test, Y_test):
         predict_test = self.predict(X_test)
