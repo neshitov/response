@@ -1,7 +1,7 @@
-import pickle
-import mudlo
+import joblib
+#import mudlo
 
 with open('mudl.pkl', 'rb') as file:
-    mudl = pickle.load(file)
+    mudl = joblib.load(file)
 
 mudl.print()

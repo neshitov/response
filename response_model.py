@@ -65,7 +65,7 @@ voting_pipeline = Pipeline([
                                 VotingClassifier(estimators=[('rf', KNeighborsClassifier(n_neighbors=3)),
                                          ('knn', KNeighborsClassifier(n_neighbors=5)),
                                          ('NB',  ComplementNB())],
-                             voting='hard', weights=[1, 1, 1]),
+                             voting='hard', weights=[0, 0, 1]),
                                n_jobs = -1))
     ])
 
@@ -88,7 +88,7 @@ def train_classifier(X, Y):
     '''
     gs = GridSearchCV(voting_pipeline, param_grid={
                     #'clf__svm__kernel': ['rbf'],
-                    'clf__estimator__weights': [[1, 1, 1],[0,1,0],[0,1,1]],
+                    'clf__estimator__weights': [[0,0,1]],
                     #'clf__svm__degree': [3],
                     #'clf__svm__gamma': [0.6]
                     }, scoring=weighted_test_f1, cv=2)

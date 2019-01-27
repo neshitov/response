@@ -1,11 +1,10 @@
-import pickle
+import joblib
 import pandas as pd
 from flask import Flask
 from flask import render_template, request, jsonify
-from response_model import ResponseModel
 
 with open('small_model.pkl', 'rb') as fp:
-     model = pickle.load(fp)
+     model = joblib.load(fp)
 
 app = Flask(__name__)
 

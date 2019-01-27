@@ -1,6 +1,6 @@
 ''' Training a model for message classifier '''
 import pandas as pd
-import pickle
+import joblib
 import os
 import argparse
 
@@ -17,11 +17,11 @@ args = argparser.parse_args()
 engine = create_engine(os.path.join('sqlite:///', args.database_path))
 
 df = pd.read_sql_table('messages', engine)
-#df = df.iloc[0:100]
+df = df.iloc[0:1000]
 X = df['message']
 
 cat_columns = df.columns[5:]
-#cat_columns = cat_columns[0:2]
+cat_columns = cat_columns[0:2]
 Y = df[cat_columns]
 
 ''' Initialize the model'''
@@ -38,7 +38,4 @@ results.to_csv('model_f1_performance.csv')
 
 ''' save model to file '''
 with open(args.model_path, 'wb') as file:
-    pickle.dump(model, file)
-
-with open(args.model_path, 'rb') as fp:
-     loaded_model = pickle.load(fp)
+    joblib.dump(model, file)
