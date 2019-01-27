@@ -27,6 +27,8 @@ df_positive = df_positive/df.shape[0]
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
+server = app.server
+
 navbar = dbc.NavbarSimple(
     children=[
     dbc.NavItem(dbc.NavLink("Source", href="https://github.com/neshitov/response")),
@@ -95,7 +97,7 @@ def update_output(n, message_text):
         cat_table = [dbc.Row([dbc.Col(html.H4(children=twod_cols[i][j], style={'color':colors[twod_cols[i][j]]}))for j in range(6)]) for i in range(n_rows)]
         nice_list = dbc.Container(cat_table)
         return nice_list
-        
+
     else:
         return []
 
