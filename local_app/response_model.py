@@ -1,7 +1,6 @@
 ''' Describing model '''
 
 import pandas as pd
-import pickle
 import numpy as np
 from nltk.tokenize import RegexpTokenizer
 from nltk.corpus import stopwords
@@ -11,12 +10,7 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import classification_report
 from sklearn.naive_bayes import ComplementNB
-from sklearn.svm import SVC, LinearSVC
-from sklearn.ensemble import VotingClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.multioutput import MultiOutputClassifier
-from sklearn.tree import DecisionTreeClassifier
 import spacy
 import os
 import nltk
@@ -51,7 +45,7 @@ def tokenize(text):
     return tokens
 
 ''' pipeline combining Naive Bayes and k-neighbors classifiers'''
-voting_pipeline = Pipeline([
+NB_pipeline = Pipeline([
     ('process', FeatureUnion([
     ('all_tokens', Pipeline([
             ('vectorize', CountVectorizer(tokenizer=tokenize)),
@@ -61,14 +55,10 @@ voting_pipeline = Pipeline([
             ('vectorize', CountVectorizer(tokenizer=tokenize)),
             ('tfidf', TfidfTransformer())]))
                 ])),
-    ('clf', MultiOutputClassifier(
-                                VotingClassifier(estimators=[('rf', KNeighborsClassifier(n_neighbors=3)),
-                                         ('knn', KNeighborsClassifier(n_neighbors=5)),
-                                         ('NB',  ComplementNB())],
-                             voting='hard', weights=[1, 1, 1]),
-                               n_jobs = -1))
+    ('clf', MultiOutputClassifier(ComplementNB()))
     ])
 
+#print(NB_pipeline.get_params().keys())
 
 def weighted_test_f1(estimator, X_test, Y_test):
     predict_test = estimator.predict(X_test)
@@ -86,9 +76,10 @@ def train_classifier(X, Y):
 
 
     '''
-    gs = GridSearchCV(voting_pipeline, param_grid={
+    gs = GridSearchCV(NB_pipeline, param_grid={
                     #'clf__svm__kernel': ['rbf'],
-                    'clf__estimator__weights': [[1, 1, 1],[0,1,0],[0,1,1]],
+                    'process__all_tokens__tfidf__use_idf': [False],
+                    'clf__estimator__norm': [False],
                     #'clf__svm__degree': [3],
                     #'clf__svm__gamma': [0.6]
                     }, scoring=weighted_test_f1, cv=2)

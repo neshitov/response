@@ -1,94 +1,103 @@
+# -*- coding: utf-8 -*-
+import dash
+import dash_core_components as dcc
+import dash_bootstrap_components as dbc
+import dash_html_components as html
+from dash.dependencies import Input, Output, State
 import joblib
-import pandas as pd
-from flask import Flask
-from flask import render_template, request, jsonify
-from sqlalchemy import create_engine
 import os
-import sys
-import json
-import plotly
+import numpy as np
+import pandas as pd
+from sqlalchemy import create_engine
 from plotly.graph_objs import Bar, Pie
 
-with open('small_model.pkl', 'rb') as fp:
+external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
+
+with open('big_model.pkl', 'rb') as fp:
      model = joblib.load(fp)
 
-
 engine = create_engine(os.path.join('sqlite:///', './data/categorized_messages.db'))
+
 df = pd.read_sql_table('messages', engine)
+genre_counts = df.groupby('genre').count()['message']
+genre_names = list(genre_counts.index)
+cat_columns = list(model.cat_columns)
+df_positive = df[cat_columns].apply(np.sum)
+df_positive = df_positive/df.shape[0]
 
-print(df.columns)
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
+navbar = dbc.NavbarSimple(
+    children=[
+    dbc.NavItem(dbc.NavLink("Source", href="https://github.com/neshitov/response")),
+    ],
+    brand="Disaster Response Project",
+    brand_href="#",
+    sticky="top",
+)
 
-sys.exit()
-app = Flask(__name__)
+app.layout = html.Div(children=[
+    navbar,
 
-@app.route('/')
-@app.route('/index')
-def index():
+    dcc.Textarea(placeholder='Enter a message to classify',
+    style={'width': '100%'},
+    value='', id='input-field'),
 
-    # extract data needed for visuals
-    # TODO: Below is an example - modify to extract data for your own visuals
-    genre_counts = df.groupby('genre').count()['message']
-    genre_names = list(genre_counts.index)
+    html.Button('Submit', id='button'),
 
-    # create visuals
-    # TODO: Below is an example - modify to create your own visuals
+    html.Div( id = 'list',
+    children = []
+    ),
 
-    labels = genre_names
-    values = genre_counts.tolist()
+    html.H3(children='Dataset visualization:', style={'text-align':'center'}),
+    dbc.Container([
+        dbc.Row([
+            dbc.Col(html.Img(src=app.get_asset_url('white_cloud.png'))),
+            dbc.Col(
+                dcc.Graph(
+                    id='example-graph',
+                    figure={
+                        'data': [Pie(labels=genre_names, values=genre_counts.tolist())],
+                        'layout': {'title': 'Message sources'}
+                           }
+                         )
+                   )
+                ])
+            ]),
 
-    graphs = [
-        {
-            'data': [
-                Pie(labels=labels, values=values)
+    dcc.Graph(
+        id='pos_ratio',
+        figure={
+            'data': [Bar(x=cat_columns,y=df_positive.values)],
+            'layout': {'title': 'Positive ratio per category'}
+               }
+             )
+])
 
-            ],
+@app.callback(Output('list', 'children'),
+            [Input('button', 'n_clicks')],
+            [State('input-field', 'value')])
 
-            'layout': {
-                'title': 'Message sources'
-
-            }
-        }
-    ]
-
-
-        # encode plotly graphs in JSON
-    ids = ["graph-{}".format(i) for i, _ in enumerate(graphs)]
-    graphJSON = json.dumps(graphs, cls=plotly.utils.PlotlyJSONEncoder)
-
-    # render web page with plotly graphs
-    return render_template('master.html', ids=ids, graphJSON=graphJSON)
-
-
-@app.route('/go')
-def go():
-    # save user input in query
-    message_text = request.args.get('query', '')
-    message = pd.Series(message_text)
-    # use model to predict classification for query
-    df = model.predict(message)
-    labels = df.values[0]
-    classification_results = dict(zip(df.columns, labels))
-
-    # This will render the go.html Please see that file.
-    return render_template(
-        'go.html',
-        query=message_text,
-        classification_result=classification_results
-    )
-
-
-def main():
-    app.run(host='0.0.0.0', port=3001, debug=True)
-
+def update_output(n, message_text):
+    if len(message_text)>0:
+        message = pd.Series(message_text)
+        # use model to predict classification for query
+        df = model.predict(message)
+        colors = {}
+        for col in cat_columns:
+            if df.loc[0,col]==0:
+                colors[col]='gray'
+            else:
+                colors[col]='green'
+        ext_cols = cat_columns + ['' for i in range(-len(cat_columns)%6)]
+        twod_cols = np.array(ext_cols).reshape((-1,6))
+        n_rows = twod_cols.shape[0]
+        cat_table = [dbc.Row([dbc.Col(html.H4(children=twod_cols[i][j], style={'color':colors[twod_cols[i][j]]}))for j in range(6)]) for i in range(n_rows)]
+        nice_list = dbc.Container(cat_table)
+        return nice_list
+        
+    else:
+        return []
 
 if __name__ == '__main__':
-    main()
-'''
-message_text = input('Message: ')
-message = pd.Series(message_text)
-df = model.predict(message)
-print(df)
-g = {'cats': list(df.columns), 'labels': df.values.squeeze().tolist()}
-print(g)
-'''
+    app.run_server(debug=True)
