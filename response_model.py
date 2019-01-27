@@ -50,8 +50,7 @@ def tokenize(text):
     tokens = [lemmatizer.lemmatize(token).strip() for token in tokens]
     return tokens
 
-''' pipeline combining Naive Bayes and k-neighbors classifiers'''
-voting_pipeline = Pipeline([
+NB_pipeline = Pipeline([
     ('process', FeatureUnion([
     ('all_tokens', Pipeline([
             ('vectorize', CountVectorizer(tokenizer=tokenize)),
@@ -61,14 +60,8 @@ voting_pipeline = Pipeline([
             ('vectorize', CountVectorizer(tokenizer=tokenize)),
             ('tfidf', TfidfTransformer())]))
                 ])),
-    ('clf', MultiOutputClassifier(
-                                VotingClassifier(estimators=[('rf', KNeighborsClassifier(n_neighbors=3)),
-                                         ('knn', KNeighborsClassifier(n_neighbors=5)),
-                                         ('NB',  ComplementNB())],
-                             voting='hard', weights=[0, 0, 1]),
-                               n_jobs = -1))
+    ('clf', MultiOutputClassifier(ComplementNB()))
     ])
-
 
 def weighted_test_f1(estimator, X_test, Y_test):
     predict_test = estimator.predict(X_test)
@@ -86,11 +79,9 @@ def train_classifier(X, Y):
 
 
     '''
-    gs = GridSearchCV(voting_pipeline, param_grid={
-                    #'clf__svm__kernel': ['rbf'],
-                    'clf__estimator__weights': [[0,0,1]],
-                    #'clf__svm__degree': [3],
-                    #'clf__svm__gamma': [0.6]
+    gs = GridSearchCV(NB_pipeline, param_grid={
+                    'process__all_tokens__tfidf__use_idf': [True, False],
+                    'clf__estimator__norm': [True, False],
                     }, scoring=weighted_test_f1, cv=2)
     gs.fit(X,Y.values)
     ''' find the best parameters '''

@@ -1,3 +1,0 @@
-,model_name,weighted_f1_score
-0,svm_clf__gamma_0.65_tfidf__use_idf_False,0.8047619047619048
-1,svm_clf__gamma_0.65_tfidf__use_idf_True,0.8047619047619048
